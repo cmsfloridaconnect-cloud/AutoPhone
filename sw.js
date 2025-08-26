@@ -16,10 +16,15 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET') return;
+  // Only handle same-origin GET requests. Without this check, the service
+  // worker attempts to cache cross-origin requests which can cause errors
+  // for opaque responses or unnecessarily bloat the cache.
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith(
     caches.match(e.request).then(cached => {
       return cached || fetch(e.request).then(resp => {
+        // Avoid caching error responses (e.g. 404s)
+        if (!resp || !resp.ok) return resp;
         const copy = resp.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));
         return resp;
