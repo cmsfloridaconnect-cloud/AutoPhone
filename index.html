@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AutoPhone — iPhone App (PWA)</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2e7d32">
+<style>
+  :root{--bg:#0b0b0c;--card:#14161a;--ink:#e8eaed;--muted:#9aa0a6;--accent:#66bb6a;--ok:#4cd964;--bad:#ff6b6b;--chip:#23252b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:calc(env(safe-area-inset-top)+16px) 16px calc(env(safe-area-inset-bottom)+24px)}
+  h1{margin:0 0 6px;font-size:24px}
+  p{color:var(--muted);margin:0 0 8px}
+  .panel{background:var(--card);border-radius:16px;padding:12px;margin-top:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .btn{appearance:none;border:none;border-radius:12px;padding:10px 14px;background:var(--accent);color:#081325;font-weight:700;cursor:pointer}
+  .btn.secondary{background:#2a3037;color:var(--ink)}
+  textarea{width:100%;min-height:140px;background:#0f1115;border:1px solid #2a3037;border-radius:12px;color:#e5e7eb;padding:10px;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace}
+  select,input[type="text"],input[type="number"],input[type="datetime-local"]{background:var(--chip);border:none;color:var(--ink);padding:10px 12px;border-radius:12px}
+  input[type="number"]{width:88px}
+  .list{display:grid;grid-template-columns:42px 1.3fr 1fr 70px 0.9fr 0.9fr 1fr 60px;gap:8px;align-items:center}
+  .head{color:var(--muted);font-weight:800}
+  .place{font-weight:700}
+  a.tel{color:#b2fab4;text-decoration:none;font-size:22px}
+  .called{opacity:.55}
+  .badge{display:inline-block;background:#2a3037;border-radius:8px;padding:2px 6px;margin-left:6px;font-size:11px;color:#b6bbc4}
+  .badge.dnc{background:#3a1f24;color:#ff9aa5}
+  .small{color:var(--muted);font-size:12px}
+  .progress{height:10px;background:#24262d;border-radius:999px;overflow:hidden;flex:1}
+  .bar{height:100%;width:0%}
+  .bigNext{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom)+16px);display:none}
+  .bigNext .btn{width:100%;font-size:18px;padding:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AutoPhone — iPhone App</h1>
+  <p>Install to Home Screen for full-screen & offline. Paste rows or choose a CSV, then tap <b>Parse</b>.</p>
+
+  <div class="panel">
+    <div class="row">
+      <input id="file" type="file" accept=".csv" class="btn secondary" style="padding:8px 12px">
+      <button id="loadSample" class="btn secondary">Load sample</button>
+      <button id="parse" class="btn">Parse</button>
+      <span class="small" id="status">Nothing loaded yet.</span>
+    </div>
+    <textarea id="paste" placeholder="Place,Phone
+Sunrise Clinic,(415) 555-0198
+Bluebird Dental,212-555-0147
+Acme Hardware,1-650-555-0123"></textarea>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label class="small">Country code</label>
+      <select id="cc">
+        <option value="+1" selected>+1 (US/CA)</option>
+        <option value="+44">+44 (UK)</option>
+        <option value="+61">+61 (AU)</option>
+        <option value="+353">+353 (IE)</option>
+        <option value="+49">+49 (DE)</option>
+      </select>
+      <label class="small"><input type="checkbox" id="only10" checked> US 10/11 digits only</label>
+      <label class="small"><input type="checkbox" id="dedupe" checked> Remove duplicates</label>
+      <label class="small"><input type="checkbox" id="skipCalled" checked> Skip already called</label>
+      <label class="small"><input type="checkbox" id="skipDnc" checked> Skip DNC/Wrong</label>
+    </div>
+    <div class="row">
+      <label class="small"><input type="checkbox" id="tapConfirm" checked> Tap-to-confirm mode (iOS safe)</label>
+      <label class="small"><input type="checkbox" id="wakeLock"> Keep screen awake (experimental)</label>
+    </div>
+  </div>
+
+  <div id="actions" class="panel" style="display:none">
+    <div class="row" style="width:100%">
+      <button id="dialNext" class="btn">Dial next</button>
+      <button id="autoToggle" class="btn">Start auto</button>
+      <button id="autoStop" class="btn secondary" style="display:none">Stop</button>
+      <label class="small">Delay <input id="delay" type="number" min="3" max="60" value="10"> sec</label>
+      <div class="progress"><div id="bar" class="bar"></div></div>
+      <span id="count" class="small"></span>
+    </div>
+  </div>
+
+  <div id="results" class="panel" style="display:none">
+    <div class="list">
+      <div class="head">#</div>
+      <div class="head">Place</div>
+      <div class="head">Phone</div>
+      <div class="head">Dial</div>
+      <div class="head">Outcome</div>
+      <div class="head">Time</div>
+      <div class="head">Notes</div>
+      <div class="head">Keep?</div>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <div class="bigNext" id="bigNext"><button class="btn">Tap to dial next</button></div>
+</div>
+
+<script>
+// PWA register
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
+
+// Wake lock support
+let wl = null;
+async function setWakeLock(on){
+  try{
+    if (!('wakeLock' in navigator)) return;
+    if (on && !wl){ wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', ()=>{ wl=null; }); }
+    if (!on && wl){ await wl.release(); wl=null; }
+  }catch(e){ wl=null; }
+}
+
+// App
+(function(){
+  const $=q=>document.querySelector(q), $$=q=>Array.from(document.querySelectorAll(q));
+  const file=$('#file'), paste=$('#paste'), parseBtn=$('#parse'), status=$('#status');
+  const only10=$('#only10'), dedupe=$('#dedupe'), cc=$('#cc'), skipCalled=$('#skipCalled'), skipDnc=$('#skipDnc');
+  const tapConfirm=$('#tapConfirm'), wakeLock=$('#wakeLock');
+  const actions=$('#actions'), results=$('#results'), list=$('#list'), count=$('#count'), bar=$('#bar');
+  const dialNextBtn=$('#dialNext'), autoToggle=$('#autoToggle'), autoStop=$('#autoStop'), delayIn=$('#delay');
+  const loadSample=$('#loadSample'), bigNext=$('#bigNext');
+
+  const CALLED_KEY='autophone_called_v1', DNC_KEY='autophone_dnc_v1';
+  const OUTCOMES=['','Connected','Left VM','No Answer','Busy','Call Back','Wrong Number','Do Not Call'];
+
+  function loadSet(k){ try{return new Set(JSON.parse(localStorage.getItem(k)||'[]'));}catch(e){return new Set();} }
+  function saveSet(k,s){ localStorage.setItem(k, JSON.stringify([...s])); }
+  let calledSet=loadSet(CALLED_KEY);
+  let dncSet=loadSet(DNC_KEY);
+
+  let rows=[], numbers=[], idx=0, timer=null, progressStart=0, progressDur=10000, waiting=-1, resumeOnOutcome=false;
+
+  function fmt(d){const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes());}
+
+  loadSample.addEventListener('click', ()=>{
+    paste.value='Place,Phone\nSunrise Clinic,(415) 555-0198\nBluebird Dental,212-555-0147\nAcme Hardware,1-650-555-0123\n';
+    status.textContent='Sample loaded — tap Parse.';
+  });
+
+  file.addEventListener('change', async e=>{
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    if(!/\.csv$/i.test(f.name)){ status.innerHTML='Export to <b>CSV</b> first.'; return; }
+    const buf=await f.arrayBuffer(); paste.value=new TextDecoder('utf-8').decode(buf);
+    status.textContent='CSV loaded — tap Parse.';
+  });
+
+  parseBtn.addEventListener('click', ()=>{
+    if(!paste.value.trim()){ status.textContent='Paste rows or choose a CSV first.'; return; }
+    rows=parseDelimited(paste.value);
+    buildNumbers(); render();
+  });
+
+  function parseDelimited(text){
+    const lines=text.split(/\r?\n/).filter(x=>x.length>0);
+    if(!lines.length) return [];
+    const first=lines[0];
+    const delim=(first.split('\t').length-1)>(first.split(',').length-1)?'\t':',';
+    return lines.map(line=>parseLine(line,delim));
+  }
+  function parseLine(line,delim){
+    let out=[], cur='', q=false;
+    for(let i=0;i<line.length;i++){
+      const c=line[i], n=line[i+1];
+      if(q){
+        if(c=='"' && n=='"'){cur+='"'; i++;}
+        else if(c=='"'){q=false;}
+        else cur+=c;
+      }else{
+        if(c=='"'){q=true;}
+        else if(c==delim){out.push(cur); cur='';}
+        else cur+=c;
+      }
+    }
+    out.push(cur); return out;
+  }
+
+  function pickPlace(row){
+    let best='';
+    for(const c of row){
+      const s=String(c||'').trim();
+      if(!s || /@/.test(s)) continue;
+      const digits=(s.match(/\d/g)||[]).length, letters=(s.match(/[A-Za-z]/g)||[]).length;
+      if(digits>letters) continue;
+      if(s.length>best.length) best=s;
+    }
+    return best;
+  }
+
+  function normalize(raw){
+    const ccVal=cc.value;
+    let s=String(raw||'').trim();
+    s=s.replace(/(?:\s*(?:x|ext|#)\s*\d+)\s*$/i,''); // drop extension
+    s=s.replace(/[^\d+]/g,'');
+    if(!s) return null;
+    if(s.startsWith('++')) s=s.replace(/^\++/,'+');
+    if(s[0]!=='+' ){
+      const d=s.replace(/\D/g,'');
+      if(only10.checked){
+        if(d.length===11 && d.startsWith('1')) s='+'+d;
+        else if(d.length===10) s=ccVal+d;
+        else return null;
+      }else{
+        if(/^\d{10}$/.test(d)) s=ccVal+d;
+        else if(/^\d{11,15}$/.test(d)) s='+'+d;
+        else return null;
+      }
+    }else{
+      const d=s.slice(1).replace(/\D/g,'');
+      if(d.length<7 || d.length>15) return null;
+      s='+'+d;
+    }
+    return s;
+  }
+
+  function pretty(tel){
+    const d=tel.replace(/\D/g,'');
+    if(d.length===11 && d.startsWith('1')){const n=d.slice(1); return `( ${n.slice(0,3)} ) ${n.slice(3,6)}-${n.slice(6)}`;}
+    if(d.length===10){return `( ${d.slice(0,3)} ) ${d.slice(3,6)}-${d.slice(6)}`;}
+    return tel;
+  }
+
+  function buildNumbers(){
+    const rx=/(?:(?:\+?\d{1,3}[\s\-.()]*)?(?:\(?\d{3}\)?[\s\-.()]*)\d{3}[\s\-.()]*\d{4})(?:\s*(?:x|ext|#)\s*\d+)?/gi;
+    let out=[];
+    for(const row of rows){
+      const place=pickPlace(row)||'';
+      for(const cell of row){
+        const s=String(cell||'');
+        if(!/\d/.test(s)) continue;
+        const m=s.match(rx);
+        if(m) m.forEach(mm=> out.push({raw:mm, place}));
+      }
+    }
+    const seen=new Set(); const final=[];
+    for(const o of out){
+      const tel=normalize(o.raw); if(!tel) continue;
+      if(dedupe.checked && seen.has(tel)) continue;
+      seen.add(tel);
+      final.push({tel, place:o.place});
+    }
+    numbers = final
+      .filter(x=> !skipCalled.checked || !calledSet.has(x.tel))
+      .filter(x=> !skipDnc.checked || !dncSet.has(x.tel))
+      .map((x,i)=>({idx:i+1, tel:x.tel, display:pretty(x.tel), place:x.place, outcome:'', time:'', notes:'', keep:true, called:calledSet.has(x.tel)}));
+    idx=0; waiting=-1; resumeOnOutcome=false;
+  }
+
+  function render(){
+    list.innerHTML='';
+    numbers.forEach((n,i)=>{
+      const row=document.createElement('div'); row.className='list'+(n.called?' called':'');
+      row.setAttribute('data-i',i);
+      row.innerHTML=`
+        <div>${i+1}</div>
+        <div><span class="place">${escapeHtml(n.place)||'(Unknown)'}</span> ${n.called?'<span class="badge">called</span>':''} ${dncSet.has(n.tel)?'<span class="badge dnc">DNC</span>':''}</div>
+        <div>${n.display}<div class="small">${n.tel}</div></div>
+        <div><a class="tel" href="tel:${n.tel}" data-i="${i}">📞</a></div>
+        <div>
+          <select class="outcomeSelect" data-i="${i}">
+            ${OUTCOMES.map(o=>`<option value="${escAttr(o)}">${o||'—'}</option>`).join('')}
+          </select>
+        </div>
+        <div><input class="timeInput" data-i="${i}" type="text" readonly placeholder="—"></div>
+        <div><input class="noteInput" data-i="${i}" type="text" placeholder="Notes"></div>
+        <div><input class="keep" data-i="${i}" type="checkbox" ${n.called?'':'checked'}></div>
+      `;
+      list.appendChild(row);
+    });
+    actions.style.display = numbers.length ? '' : 'none';
+    results.style.display = numbers.length ? '' : 'none';
+    updateCount();
+    status.innerHTML = numbers.length ? `Parsed <b>${numbers.length}</b> numbers.` : 'No numbers found.';
+  }
+
+  list.addEventListener('change', e=>{
+    const t=e.target, i=parseInt(t.getAttribute('data-i')||'-1',10); if(!Number.isFinite(i)||i<0) return;
+    const n=numbers[i]; if(!n) return;
+    if(t.classList.contains('noteInput')) n.notes=t.value;
+    else if(t.classList.contains('outcomeSelect')){
+      n.outcome=t.value;
+      const ti=list.querySelector(`.timeInput[data-i="${i}"]`);
+      if(t.value && !n.time){ n.time=fmt(new Date()); if(ti) ti.value=n.time; }
+      if(t.value==='Do Not Call' || t.value==='Wrong Number'){ dncSet.add(n.tel); saveSet(DNC_KEY,dncSet); const p=list.querySelector(`.list[data-i="${i}"] .place`); if(p && !p.innerHTML.includes('DNC')) p.insertAdjacentHTML('afterend',' <span class="badge dnc">DNC</span>'); const keep=list.querySelector(`input.keep[data-i="${i}"]`); if(keep) keep.checked=false; }
+      if(resumeOnOutcome && i===waiting && n.outcome){ waiting=-1; resumeOnOutcome=false; startAuto(); }
+    } else if (t.classList.contains('keep')) n.keep = t.checked;
+    updateCount();
+  });
+
+  list.addEventListener('click', e=>{
+    const a=e.target.closest('a.tel'); if(a){ const i=parseInt(a.getAttribute('data-i'),10); markCalled(i); }
+  });
+
+  function updateCount(){
+    const total=numbers.length;
+    const sel=$$('.keep').filter(cb=>cb.checked).length;
+    count.textContent=`${sel}/${total} ready`;
+  }
+
+  function markCalled(i){
+    const n=numbers[i]; if(!n) return;
+    n.called=true; calledSet.add(n.tel); saveSet(CALLED_KEY,calledSet);
+    const row=list.querySelector(`.list[data-i="${i}"]`);
+    if(row){ row.classList.add('called'); const keep=row.querySelector('input.keep'); if(keep) keep.checked=false; const pl=row.querySelector('.place'); if(pl && !pl.parentElement.innerHTML.includes('called')) pl.insertAdjacentHTML('afterend',' <span class="badge">called</span>'); }
+    updateCount();
+  }
+
+  dialNextBtn.addEventListener('click', ()=>dialNext(false));
+  function nextKeepIndex(from){
+    const keep=$$('.keep');
+    for(let step=0; step<keep.length; step++){ const i=(from+step)%keep.length; if(keep[i].checked) return parseInt(keep[i].getAttribute('data-i'),10); }
+    return -1;
+  }
+  function dialNext(fromAuto){
+    const keep=$$('.keep'); if(keep.length===0){ alert('No numbers loaded.'); return; }
+    const start=nextKeepIndex(idx); if(start<0){ alert('No numbers selected.'); return; }
+    idx=start+1;
+    if (tapConfirm.checked && fromAuto) {
+      // show big next button (requires user tap), vibrate lightly if available
+      bigNext.style.display='block';
+      bigNext.querySelector('.btn').onclick=()=>{
+        bigNext.style.display='none';
+        markCalled(start);
+        try{ window.location.href='tel:'+numbers[start].tel; }catch(e){}
+      };
+      window.navigator.vibrate?.(50);
+      waiting=start; resumeOnOutcome=true; pauseAuto();
+      return;
+    }
+    markCalled(start);
+    try{ window.location.href='tel:'+numbers[start].tel; }catch(e){}
+    if(fromAuto){ waiting=start; resumeOnOutcome=true; pauseAuto(); }
+  }
+
+  function startAuto(){ if(timer) return; autoToggle.textContent='Pause auto'; autoStop.style.display=''; runLoop(); runProgress(); if(wakeLock.checked) setWakeLock(true); }
+  function pauseAuto(){ autoToggle.textContent='Start auto'; clearTimeout(timer); timer=null; bar.style.width='0%'; }
+  function stopAuto(){ pauseAuto(); idx=0; waiting=-1; resumeOnOutcome=false; bigNext.style.display='none'; if(wakeLock.checked) setWakeLock(false); }
+  autoToggle.addEventListener('click', ()=>{ if(timer) pauseAuto(); else startAuto(); });
+  autoStop.addEventListener('click', stopAuto);
+
+  function runLoop(){
+    const d=Math.max(3,Math.min(60,parseInt(delayIn.value||'10',10)))*1000;
+    progressDur=d;
+    if($$('.keep').filter(cb=>cb.checked).length===0){ pauseAuto(); return; }
+    dialNext(true);
+    if(resumeOnOutcome) return;
+    timer=setTimeout(runLoop, d);
+  }
+  function runProgress(){
+    progressStart=performance.now();
+    const d=progressDur;
+    function f(now){
+      const t=now-progressStart, frac=Math.min(1,t/d);
+      bar.style.width=(frac*100)+'%';
+      if(timer) requestAnimationFrame(f); else bar.style.width='0%';
+    }
+    requestAnimationFrame(f);
+  }
+
+  function escapeHtml(s){ return String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+  function escAttr(s){ return String(s||'').replace(/"/g,'&quot;'); }
+
+  [only10,dedupe,cc,skipCalled,skipDnc].forEach(el => el.addEventListener('change', ()=>{ if(rows.length){ buildNumbers(); render(); }}));
+  wakeLock.addEventListener('change', ()=> setWakeLock(wakeLock.checked));
+})();</script>
+</body>
+</html>
