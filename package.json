@@ -1,0 +1,10 @@
+{
+  "name": "autophone",
+  "version": "1.0.0",
+  "devDependencies": {
+    "papaparse": "^5.4.1"
+  },
+  "scripts": {
+    "test": "node test/normalize.test.js && node test/csv.test.js"
+  }
+}
