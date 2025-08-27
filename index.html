@@ -40,7 +40,7 @@
 <body>
 <div class="wrap">
   <h1>AutoPhone — iPhone App</h1>
-  <p>Install to Home Screen for full-screen & offline. Paste rows or choose a CSV, then tap <b>Parse</b>.</p>
+  <p>Install to Home Screen for full-screen & offline. Paste rows or choose a CSV, then tap <b>Parse</b>. After calling, use <b>Export CSV</b> to save your log.</p>
 
   <div class="panel">
     <div class="row">
@@ -65,7 +65,7 @@ Acme Hardware,1-650-555-0123"></textarea>
         <option value="+353">+353 (IE)</option>
         <option value="+49">+49 (DE)</option>
       </select>
-      <label class="small"><input type="checkbox" id="only10" checked> US 10/11 digits only</label>
+      <label class="small"><input type="checkbox" id="only10" checked> US 10/11 digits only (ignored for other codes)</label>
       <label class="small"><input type="checkbox" id="dedupe" checked> Remove duplicates</label>
       <label class="small"><input type="checkbox" id="skipCalled" checked> Skip already called</label>
       <label class="small"><input type="checkbox" id="skipDnc" checked> Skip DNC/Wrong</label>
@@ -81,6 +81,7 @@ Acme Hardware,1-650-555-0123"></textarea>
       <button id="dialNext" class="btn">Dial next</button>
       <button id="autoToggle" class="btn">Start auto</button>
       <button id="autoStop" class="btn secondary" style="display:none">Stop</button>
+      <button id="exportCsv" class="btn secondary">Export CSV</button>
       <label class="small">Delay <input id="delay" type="number" min="3" max="60" value="10"> sec</label>
       <div class="progress"><div id="bar" class="bar"></div></div>
       <span id="count" class="small"></span>
@@ -99,11 +100,14 @@ Acme Hardware,1-650-555-0123"></textarea>
       <div class="head">Keep?</div>
     </div>
     <div id="list"></div>
+    <div class="row" style="margin-top:12px"><button id="aiSummary" class="btn secondary">AI Summary</button></div>
+    <div id="aiOutput" class="panel" style="display:none;margin-top:12px"></div>
   </div>
 
-  <div class="bigNext" id="bigNext"><button class="btn">Tap to dial next</button></div>
+<div class="bigNext" id="bigNext"><button class="btn">Tap to dial next</button></div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script>
 // PWA register
 if ('serviceWorker' in navigator) {
@@ -128,6 +132,7 @@ async function setWakeLock(on){
   const tapConfirm=$('#tapConfirm'), wakeLock=$('#wakeLock');
   const actions=$('#actions'), results=$('#results'), list=$('#list'), count=$('#count'), bar=$('#bar');
   const dialNextBtn=$('#dialNext'), autoToggle=$('#autoToggle'), autoStop=$('#autoStop'), delayIn=$('#delay');
+  const exportBtn=$('#exportCsv'), aiBtn=$('#aiSummary'), aiOut=$('#aiOutput');
   const loadSample=$('#loadSample'), bigNext=$('#bigNext');
 
   const CALLED_KEY='autophone_called_v1', DNC_KEY='autophone_dnc_v1';
@@ -161,27 +166,11 @@ async function setWakeLock(on){
   });
 
   function parseDelimited(text){
-    const lines=text.split(/\r?\n/).filter(x=>x.length>0);
-    if(!lines.length) return [];
-    const first=lines[0];
-    const delim=(first.split('\t').length-1)>(first.split(',').length-1)?'\t':',';
-    return lines.map(line=>parseLine(line,delim));
-  }
-  function parseLine(line,delim){
-    let out=[], cur='', q=false;
-    for(let i=0;i<line.length;i++){
-      const c=line[i], n=line[i+1];
-      if(q){
-        if(c=='"' && n=='"'){cur+='"'; i++;}
-        else if(c=='"'){q=false;}
-        else cur+=c;
-      }else{
-        if(c=='"'){q=true;}
-        else if(c==delim){out.push(cur); cur='';}
-        else cur+=c;
-      }
-    }
-    out.push(cur); return out;
+    const result = Papa.parse(text, {
+      delimiter: '', // auto-detect
+      skipEmptyLines: true
+    });
+    return result.data || [];
   }
 
   function pickPlace(row){
@@ -203,16 +192,18 @@ async function setWakeLock(on){
     s=s.replace(/[^\d+]/g,'');
     if(!s) return null;
     if(s.startsWith('++')) s=s.replace(/^\++/,'+');
-    if(s[0]!=='+' ){
+    if(s[0]!=='+'){
       const d=s.replace(/\D/g,'');
-      if(only10.checked){
+      const onlyUs = only10.checked && ccVal === '+1';
+      if(onlyUs){
         if(d.length===11 && d.startsWith('1')) s='+'+d;
         else if(d.length===10) s=ccVal+d;
         else return null;
       }else{
-        if(/^\d{10}$/.test(d)) s=ccVal+d;
-        else if(/^\d{11,15}$/.test(d)) s='+'+d;
-        else return null;
+        if(/^\d{7,15}$/.test(d)){
+          if(ccVal !== '+1' && d.startsWith('0')) s=ccVal + d.slice(1);
+          else s=d.length===10 ? ccVal+d : '+'+d;
+        }else return null;
       }
     }else{
       const d=s.slice(1).replace(/\D/g,'');
@@ -279,7 +270,7 @@ async function setWakeLock(on){
     actions.style.display = numbers.length ? '' : 'none';
     results.style.display = numbers.length ? '' : 'none';
     updateCount();
-    status.innerHTML = numbers.length ? `Parsed <b>${numbers.length}</b> numbers.` : 'No numbers found.';
+    status.innerHTML = numbers.length ? `Parsed <b>${numbers.length}</b> numbers. Use Export CSV to download the log.` : 'No numbers found.';
   }
 
   list.addEventListener('change', e=>{
@@ -314,6 +305,36 @@ async function setWakeLock(on){
     updateCount();
   }
 
+  function downloadLog(){
+    if(!numbers.length){ alert('No numbers to export.'); return; }
+    const header=['Place','Phone','Outcome','Time','Notes'];
+    const rows=numbers.map(n=>[n.place,n.display,n.outcome||'',n.time||'',n.notes||'']);
+    const csv=[header,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob([csv],{type:'text/csv'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='call-log.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function aiSummary(){
+    if(!numbers.length){ alert('No numbers to summarize.'); return; }
+    const key=window.OPENAI_API_KEY || localStorage.getItem('OPENAI_API_KEY');
+    if(!key){ alert('Missing OpenAI API key'); return; }
+    aiBtn.disabled=true; aiOut.style.display='block'; aiOut.textContent='Loading...';
+    try{
+      const log=numbers.map(n=>`Place: ${n.place}\nOutcome: ${n.outcome||''}\nNotes: ${n.notes||''}`).join('\n\n');
+      const body={model:'gpt-4o-mini',messages:[{role:'system',content:'Summarize call outcomes and notes.'},{role:'user',content:log}]};
+      const res=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},body:JSON.stringify(body)});
+      const data=await res.json();
+      aiOut.textContent=data.choices?.[0]?.message?.content?.trim()||'No summary';
+    }catch(e){
+      aiOut.textContent='AI error: '+e.message;
+    }
+    aiBtn.disabled=false;
+  }
+
   dialNextBtn.addEventListener('click', ()=>dialNext(false));
   function nextKeepIndex(from){
     const keep=$$('.keep');
@@ -346,6 +367,8 @@ async function setWakeLock(on){
   function stopAuto(){ pauseAuto(); idx=0; waiting=-1; resumeOnOutcome=false; bigNext.style.display='none'; if(wakeLock.checked) setWakeLock(false); }
   autoToggle.addEventListener('click', ()=>{ if(timer) pauseAuto(); else startAuto(); });
   autoStop.addEventListener('click', stopAuto);
+  exportBtn.addEventListener('click', downloadLog);
+  aiBtn.addEventListener('click', aiSummary);
 
   function runLoop(){
     const d=Math.max(3,Math.min(60,parseInt(delayIn.value||'10',10)))*1000;
@@ -370,6 +393,7 @@ async function setWakeLock(on){
   function escAttr(s){ return String(s||'').replace(/"/g,'&quot;'); }
 
   [only10,dedupe,cc,skipCalled,skipDnc].forEach(el => el.addEventListener('change', ()=>{ if(rows.length){ buildNumbers(); render(); }}));
+  cc.addEventListener('change', ()=>{ if(cc.value !== '+1') only10.checked=false; });
   wakeLock.addEventListener('change', ()=> setWakeLock(wakeLock.checked));
 })();</script>
 </body>
